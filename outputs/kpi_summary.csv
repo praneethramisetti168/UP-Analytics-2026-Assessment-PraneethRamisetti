@@ -1,0 +1,13 @@
+Metric,Value
+Overall Failure Rate (Test),2.34%
+Test PR-AUC,0.8933
+Test ROC-AUC,0.9936
+Test F1 Score,0.8152
+Test Recall (at threshold),0.7707
+Test Precision (at threshold),0.8653
+True Positives (caught failures),289
+False Negatives (missed failures),86
+False Positives (unnecessary inspections),45
+High-Risk Trucks,339
+High-Risk Failure Rate,85.3%
+Optimal Threshold,0.7147
