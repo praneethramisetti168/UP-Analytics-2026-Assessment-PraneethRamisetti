@@ -113,24 +113,17 @@ jupyter notebook notebook.ipynb
 
 ## File Structure
 
-```
-├── aps_failure_training_set.csv   ← Training data (29,618 rows)
-├── aps_failure_test_set.csv       ← Test data (16,000 rows)
-├── notebook.ipynb                 ← Full analysis notebook
-├── run_analysis.py                ← Standalone analysis script
-├── requirements.txt               ← Pinned dependencies
-├── api/
-│   ├── main.py                    ← FastAPI application
-│   ├── schemas.py                 ← Pydantic request/response models
-│   └── model_artifacts/           ← Saved model, preprocessor, metadata
-├── outputs/
-│   ├── figures/                   ← All visualization PNGs
-│   ├── test_predictions.csv       ← Final predictions on test set
-│   ├── test_predictions.xlsx      ← Same in Excel format
-│   ├── model_comparison.csv       ← Model comparison table
-│   └── kpi_summary.csv            ← KPI metrics table
-└── screenshots/                   ← API screenshots for submission
-```
+| Path | Description |
+|------|-------------|
+| `notebook.ipynb` | Full 48-cell analysis notebook |
+| `run_analysis.py` | Standalone reproducible script |
+| `api/main.py` | FastAPI application |
+| `api/schemas.py` | Pydantic request/response schemas |
+| `api/model_artifacts/` | model.pkl, preprocessor.pkl, model_meta.json |
+| `outputs/figures/` | 10 EDA & model visualization PNGs |
+| `outputs/test_predictions.csv` | 16,000 test predictions with risk buckets |
+| `outputs/kpi_summary.csv` | All KPI metrics |
+| `screenshots/` | API screenshots for submission |
 
 ---
 
