@@ -8,11 +8,13 @@ Usage:
     uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
 
 Endpoints:
-    GET  /            → health check + model metadata
-    POST /predict     → single truck prediction
+    GET  /              → Dashboard UI (dashboard.html)
+    GET  /api           → health check + model metadata
+    POST /predict       → single truck prediction
     POST /predict/batch → batch prediction (up to 1000 records)
-    GET  /docs        → interactive Swagger UI
-    GET  /redoc       → ReDoc documentation
+    GET  /health        → simple health ping
+    GET  /docs          → interactive Swagger UI
+    GET  /redoc         → ReDoc documentation
 """
 
 import json
@@ -25,7 +27,8 @@ import numpy as np
 import pandas as pd
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
 
 # Add parent dir to path so we can import schemas
 sys.path.insert(0, str(Path(__file__).parent))
@@ -38,6 +41,7 @@ from schemas import (
 # Paths
 # ─────────────────────────────────────────────
 MODEL_DIR = Path(__file__).parent / "model_artifacts"
+ROOT_DIR  = Path(__file__).parent.parent  # project root (where dashboard.html lives)
 
 
 # ─────────────────────────────────────────────
@@ -184,8 +188,17 @@ def classify(prob: float, threshold: float) -> tuple:
 # ─────────────────────────────────────────────
 # Endpoints
 # ─────────────────────────────────────────────
-@app.get("/", response_model=HealthResponse, summary="Health Check & Model Info")
+@app.get("/", response_class=HTMLResponse, summary="Dashboard UI", include_in_schema=False)
 async def root():
+    """Serves the analytics dashboard HTML page."""
+    dashboard_path = ROOT_DIR / "dashboard.html"
+    if not dashboard_path.exists():
+        return HTMLResponse(content="<h2>dashboard.html not found in project root.</h2>", status_code=404)
+    return HTMLResponse(content=dashboard_path.read_text(encoding="utf-8"))
+
+
+@app.get("/api", response_model=HealthResponse, summary="Health Check & Model Info")
+async def api_info():
     """Returns service health status and model metadata."""
     if model is None:
         raise HTTPException(status_code=503, detail="Model artifacts not found. Run run_analysis.py.")
@@ -197,7 +210,7 @@ async def root():
         test_roc_auc=meta.get("test_rocauc", 0.0),
         threshold=meta.get("best_threshold", 0.5),
         top_features=meta.get("top_features", []),
-        endpoints=["/", "/predict", "/predict/batch", "/docs", "/redoc"]
+        endpoints=["/", "/api", "/predict", "/predict/batch", "/docs", "/redoc"]
     )
 
 
