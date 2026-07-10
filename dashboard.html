@@ -1,0 +1,1429 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>APS Failure Prediction Dashboard — Scania Trucks</title>
+  <meta name="description" content="Interactive analytics dashboard for APS (Air Pressure System) failure prediction on Scania trucks using LightGBM classifier." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+  <style>
+    /* ── Reset & Base ─────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --bg:        #080d1a;
+      --surface:   #0f1629;
+      --surface2:  #162036;
+      --surface3:  #1d2a47;
+      --border:    rgba(255,255,255,0.07);
+      --blue:      #3b82f6;
+      --blue-glow: rgba(59,130,246,0.25);
+      --violet:    #8b5cf6;
+      --cyan:      #06b6d4;
+      --green:     #10b981;
+      --amber:     #f59e0b;
+      --red:       #ef4444;
+      --text:      #f1f5f9;
+      --muted:     #64748b;
+      --muted2:    #94a3b8;
+      --radius:    14px;
+      --radius-sm: 8px;
+      --shadow:    0 4px 24px rgba(0,0,0,0.45);
+    }
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: 'Inter', system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* ── Animated background ──────────────────────── */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background:
+        radial-gradient(ellipse 80% 60% at 10% 5%, rgba(59,130,246,0.12) 0%, transparent 60%),
+        radial-gradient(ellipse 60% 50% at 90% 90%, rgba(139,92,246,0.10) 0%, transparent 55%);
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    /* ── Layout ───────────────────────────────────── */
+    .app { position: relative; z-index: 1; display: flex; flex-direction: column; min-height: 100vh; }
+
+    /* ── Header ───────────────────────────────────── */
+    header {
+      padding: 0 2rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 68px;
+      border-bottom: 1px solid var(--border);
+      backdrop-filter: blur(12px);
+      background: rgba(8,13,26,0.8);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    .logo { display: flex; align-items: center; gap: 10px; }
+    .logo-icon {
+      width: 36px; height: 36px;
+      background: linear-gradient(135deg, var(--blue), var(--violet));
+      border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px;
+    }
+    .logo-text { font-weight: 700; font-size: 1rem; }
+    .logo-sub { font-size: 0.7rem; color: var(--muted); font-weight: 400; }
+
+    .api-badge {
+      display: flex; align-items: center; gap: 8px;
+      padding: 6px 14px;
+      background: var(--surface2);
+      border-radius: 20px;
+      font-size: 0.75rem;
+      font-weight: 500;
+      border: 1px solid var(--border);
+      cursor: default;
+    }
+    .badge-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--muted);
+      transition: background 0.3s;
+    }
+    .badge-dot.online  { background: var(--green); box-shadow: 0 0 6px var(--green); animation: pulse 2s infinite; }
+    .badge-dot.offline { background: var(--red); }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; } 50% { opacity: 0.4; }
+    }
+
+    /* ── Navigation ───────────────────────────────── */
+    nav {
+      display: flex;
+      gap: 4px;
+      padding: 0 2rem;
+      border-bottom: 1px solid var(--border);
+      background: rgba(8,13,26,0.6);
+      backdrop-filter: blur(8px);
+      overflow-x: auto;
+    }
+    nav::-webkit-scrollbar { height: 0; }
+    .tab-btn {
+      padding: 14px 18px;
+      background: none;
+      border: none;
+      color: var(--muted2);
+      font-family: inherit;
+      font-size: 0.85rem;
+      font-weight: 500;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      transition: color 0.2s, border-color 0.2s;
+      white-space: nowrap;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+    }
+    .tab-btn:hover  { color: var(--text); }
+    .tab-btn.active { color: var(--blue); border-bottom-color: var(--blue); }
+
+    /* ── Main content ─────────────────────────────── */
+    main { flex: 1; padding: 2.5rem 2rem; max-width: 1400px; width: 100%; margin: 0 auto; }
+
+    .tab-panel { display: none; animation: fadeIn 0.35s ease; }
+    .tab-panel.active { display: block; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+    /* ── Section titles ───────────────────────────── */
+    .section-title {
+      font-size: 1.5rem;
+      font-weight: 700;
+      margin-bottom: 0.3rem;
+    }
+    .section-sub {
+      color: var(--muted2);
+      font-size: 0.88rem;
+      margin-bottom: 2rem;
+    }
+
+    /* ── Grid helpers ─────────────────────────────── */
+    .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.25rem; }
+    .grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1.25rem; }
+    .grid-4 { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; }
+
+    /* ── Card ─────────────────────────────────────── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.5rem;
+      box-shadow: var(--shadow);
+      transition: transform 0.2s, box-shadow 0.2s, border-color 0.2s;
+    }
+    .card:hover { transform: translateY(-3px); box-shadow: 0 8px 32px rgba(0,0,0,0.55); border-color: rgba(255,255,255,0.12); }
+
+    /* ── KPI Card ─────────────────────────────────── */
+    .kpi-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.4rem 1.6rem;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      position: relative;
+      overflow: hidden;
+      transition: transform 0.2s, box-shadow 0.2s, border-color 0.2s;
+    }
+    .kpi-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0;
+      right: 0; height: 3px;
+      background: var(--accent-color, var(--blue));
+    }
+    .kpi-card:hover { transform: translateY(-3px); border-color: rgba(255,255,255,0.13); }
+    .kpi-label { font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted2); }
+    .kpi-value { font-size: 2rem; font-weight: 800; line-height: 1.1; }
+    .kpi-sub { font-size: 0.75rem; color: var(--muted); }
+    .kpi-icon { position: absolute; right: 1.2rem; top: 1.2rem; font-size: 1.6rem; opacity: 0.15; }
+
+    /* ── Hero ─────────────────────────────────────── */
+    .hero {
+      background: linear-gradient(135deg, rgba(59,130,246,0.15) 0%, rgba(139,92,246,0.12) 100%);
+      border: 1px solid rgba(59,130,246,0.2);
+      border-radius: 20px;
+      padding: 2.5rem 2rem;
+      margin-bottom: 2rem;
+      position: relative;
+      overflow: hidden;
+    }
+    .hero::after {
+      content: '🚛';
+      position: absolute;
+      right: 2rem;
+      top: 50%;
+      transform: translateY(-50%);
+      font-size: 6rem;
+      opacity: 0.12;
+    }
+    .hero h1 { font-size: 2rem; font-weight: 800; margin-bottom: 0.4rem; }
+    .hero h1 span { background: linear-gradient(135deg, var(--blue), var(--violet)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .hero p { color: var(--muted2); font-size: 0.95rem; max-width: 640px; line-height: 1.6; }
+    .hero-tags { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 1rem; }
+    .tag {
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+    }
+    .tag-blue   { background: rgba(59,130,246,0.15); color: #93c5fd; border: 1px solid rgba(59,130,246,0.3); }
+    .tag-violet { background: rgba(139,92,246,0.15); color: #c4b5fd; border: 1px solid rgba(139,92,246,0.3); }
+    .tag-green  { background: rgba(16,185,129,0.12); color: #6ee7b7; border: 1px solid rgba(16,185,129,0.25); }
+    .tag-amber  { background: rgba(245,158,11,0.12); color: #fcd34d; border: 1px solid rgba(245,158,11,0.25); }
+
+    /* ── Table ────────────────────────────────────── */
+    .table-wrap { overflow-x: auto; border-radius: var(--radius); border: 1px solid var(--border); }
+    table { width: 100%; border-collapse: collapse; font-size: 0.87rem; }
+    thead th {
+      padding: 12px 16px;
+      text-align: left;
+      background: var(--surface2);
+      color: var(--muted2);
+      font-size: 0.72rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+    }
+    tbody tr { border-top: 1px solid var(--border); transition: background 0.15s; }
+    tbody tr:hover { background: var(--surface2); }
+    tbody td { padding: 13px 16px; }
+    .champion { background: linear-gradient(90deg, rgba(59,130,246,0.08) 0%, transparent 60%) !important; }
+    .champion td:first-child { font-weight: 600; }
+
+    /* ── Bar chart ────────────────────────────────── */
+    .bar-wrap { display: flex; flex-direction: column; gap: 14px; }
+    .bar-row { display: flex; flex-direction: column; gap: 5px; }
+    .bar-label { display: flex; justify-content: space-between; font-size: 0.8rem; }
+    .bar-label span:first-child { color: var(--muted2); }
+    .bar-label span:last-child { font-weight: 600; }
+    .bar-track { height: 10px; background: var(--surface3); border-radius: 10px; overflow: hidden; }
+    .bar-fill {
+      height: 100%;
+      border-radius: 10px;
+      background: linear-gradient(90deg, var(--blue), var(--violet));
+      transform-origin: left;
+      animation: growBar 0.9s ease forwards;
+      transform: scaleX(0);
+    }
+    @keyframes growBar { to { transform: scaleX(1); } }
+    .bar-fill.green-bar { background: linear-gradient(90deg, var(--green), var(--cyan)); }
+    .bar-fill.amber-bar { background: linear-gradient(90deg, var(--amber), #fb923c); }
+    .bar-fill.red-bar   { background: linear-gradient(90deg, var(--red), #ec4899); }
+
+    /* ── Donut chart ──────────────────────────────── */
+    .donut-wrap { display: flex; align-items: center; gap: 2rem; flex-wrap: wrap; }
+    .donut-svg { flex-shrink: 0; filter: drop-shadow(0 4px 16px rgba(0,0,0,0.4)); }
+    .donut-legend { display: flex; flex-direction: column; gap: 14px; }
+    .legend-item { display: flex; align-items: center; gap: 10px; }
+    .legend-dot { width: 12px; height: 12px; border-radius: 50%; flex-shrink: 0; }
+    .legend-text { font-size: 0.83rem; }
+    .legend-text strong { display: block; font-weight: 600; }
+    .legend-text small { color: var(--muted); font-size: 0.75rem; }
+
+    /* ── Confusion Matrix ─────────────────────────── */
+    .cm-grid {
+      display: grid;
+      grid-template-columns: auto 1fr 1fr;
+      grid-template-rows: auto 1fr 1fr;
+      gap: 4px;
+      max-width: 360px;
+    }
+    .cm-header {
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em;
+      color: var(--muted2); padding: 8px;
+    }
+    .cm-cell {
+      border-radius: var(--radius-sm);
+      padding: 18px 12px;
+      display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+      font-weight: 700;
+    }
+    .cm-cell .cm-num { font-size: 1.6rem; }
+    .cm-cell .cm-type { font-size: 0.7rem; font-weight: 500; opacity: 0.75; }
+    .cm-tp { background: rgba(16,185,129,0.18); border: 1px solid rgba(16,185,129,0.3); color: #6ee7b7; }
+    .cm-fp { background: rgba(245,158,11,0.14); border: 1px solid rgba(245,158,11,0.25); color: #fcd34d; }
+    .cm-fn { background: rgba(239,68,68,0.15); border: 1px solid rgba(239,68,68,0.28); color: #fca5a5; }
+    .cm-tn { background: rgba(59,130,246,0.12); border: 1px solid rgba(59,130,246,0.22); color: #93c5fd; }
+    .cm-axis { writing-mode: vertical-rl; transform: rotate(180deg); font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted2); text-align: center; padding: 4px; }
+
+    /* ── Risk badge ───────────────────────────────── */
+    .risk-badge {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 3px 10px;
+      border-radius: 20px;
+      font-size: 0.72rem;
+      font-weight: 600;
+    }
+    .risk-high   { background: rgba(239,68,68,0.18);   color: #fca5a5; border: 1px solid rgba(239,68,68,0.3); }
+    .risk-medium { background: rgba(245,158,11,0.15);  color: #fcd34d; border: 1px solid rgba(245,158,11,0.28); }
+    .risk-low    { background: rgba(16,185,129,0.13);  color: #6ee7b7; border: 1px solid rgba(16,185,129,0.25); }
+    .risk-card {
+      border-radius: var(--radius);
+      padding: 1.4rem;
+      display: flex; flex-direction: column; gap: 6px;
+      border: 1px solid var(--border);
+    }
+    .risk-card.high   { background: rgba(239,68,68,0.06);  border-color: rgba(239,68,68,0.18); }
+    .risk-card.medium { background: rgba(245,158,11,0.06); border-color: rgba(245,158,11,0.18); }
+    .risk-card.low    { background: rgba(16,185,129,0.05); border-color: rgba(16,185,129,0.15); }
+    .risk-card h4 { font-size: 0.88rem; font-weight: 700; }
+    .risk-card p  { font-size: 0.8rem; color: var(--muted2); line-height: 1.5; }
+
+    /* ── Live Predictor ───────────────────────────── */
+    .predictor-wrap { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; }
+    @media (max-width: 700px) { .predictor-wrap { grid-template-columns: 1fr; } }
+    .form-title { font-size: 0.88rem; font-weight: 600; margin-bottom: 1rem; color: var(--muted2); text-transform: uppercase; letter-spacing: 0.07em; }
+    .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .form-group { display: flex; flex-direction: column; gap: 5px; }
+    label { font-size: 0.72rem; font-weight: 600; color: var(--muted2); text-transform: uppercase; letter-spacing: 0.06em; }
+    input[type="number"], input[type="text"] {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      color: var(--text);
+      font-family: inherit;
+      font-size: 0.875rem;
+      padding: 9px 12px;
+      outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s;
+      width: 100%;
+    }
+    input:focus { border-color: var(--blue); box-shadow: 0 0 0 3px rgba(59,130,246,0.12); }
+    input::placeholder { color: var(--muted); }
+
+    .btn-predict {
+      margin-top: 1rem;
+      width: 100%;
+      padding: 12px;
+      background: linear-gradient(135deg, var(--blue), var(--violet));
+      color: #fff;
+      border: none;
+      border-radius: var(--radius-sm);
+      font-family: inherit;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.2s, transform 0.15s;
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+    }
+    .btn-predict:hover:not(:disabled) { opacity: 0.88; transform: translateY(-1px); }
+    .btn-predict:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-predict .spinner {
+      width: 16px; height: 16px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      display: none;
+    }
+    .btn-predict.loading .spinner { display: block; }
+    .btn-predict.loading .btn-text { display: none; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Result Panel ─────────────────────────────── */
+    .result-panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 2rem;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 340px;
+      text-align: center;
+    }
+    .result-idle { color: var(--muted); font-size: 0.9rem; }
+    .result-idle .idle-icon { font-size: 3rem; margin-bottom: 1rem; opacity: 0.4; }
+
+    /* ── Gauge ────────────────────────────────────── */
+    .gauge-wrap { position: relative; width: 200px; height: 120px; margin-bottom: 1rem; }
+    .gauge-svg { width: 200px; height: 120px; }
+    .gauge-track { fill: none; stroke: var(--surface3); stroke-width: 16; stroke-linecap: round; }
+    .gauge-fill  {
+      fill: none;
+      stroke-width: 16;
+      stroke-linecap: round;
+      transition: stroke-dashoffset 0.8s cubic-bezier(0.25,0.46,0.45,0.94), stroke 0.4s;
+    }
+    .gauge-label {
+      position: absolute;
+      bottom: 0; left: 50%;
+      transform: translateX(-50%);
+      text-align: center;
+    }
+    .gauge-pct { font-size: 2rem; font-weight: 800; }
+    .gauge-sub  { font-size: 0.72rem; color: var(--muted); }
+
+    .result-risk { font-size: 1.2rem; font-weight: 700; margin-bottom: 0.5rem; }
+    .result-label { font-size: 0.85rem; color: var(--muted2); margin-bottom: 0.5rem; }
+    .result-rec {
+      background: var(--surface2);
+      border-radius: var(--radius-sm);
+      padding: 10px 16px;
+      font-size: 0.82rem;
+      color: var(--muted2);
+      margin-top: 0.8rem;
+      width: 100%;
+      text-align: left;
+    }
+    .result-meta { display: flex; gap: 1rem; margin-top: 0.8rem; justify-content: center; flex-wrap: wrap; }
+    .meta-chip {
+      display: flex; flex-direction: column; align-items: center;
+      background: var(--surface2);
+      border-radius: var(--radius-sm);
+      padding: 8px 14px;
+      font-size: 0.7rem;
+      gap: 2px;
+    }
+    .meta-chip strong { font-size: 0.9rem; font-weight: 700; }
+
+    .api-error {
+      color: var(--red);
+      font-size: 0.82rem;
+      background: rgba(239,68,68,0.1);
+      border: 1px solid rgba(239,68,68,0.25);
+      border-radius: var(--radius-sm);
+      padding: 10px 14px;
+      margin-top: 0.8rem;
+      width: 100%;
+    }
+
+    /* ── Pipeline flow ────────────────────────────── */
+    .pipeline {
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+      position: relative;
+    }
+    .pipe-step {
+      display: flex;
+      align-items: flex-start;
+      gap: 1rem;
+      padding: 1.2rem 0;
+      position: relative;
+    }
+    .pipe-step:not(:last-child)::after {
+      content: '';
+      position: absolute;
+      left: 18px; top: calc(1.2rem + 36px);
+      width: 2px;
+      height: calc(100% - 36px + 1.2rem);
+      background: linear-gradient(to bottom, var(--blue), transparent);
+      z-index: 0;
+    }
+    .pipe-num {
+      width: 36px; height: 36px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, var(--blue), var(--violet));
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 700; font-size: 0.85rem;
+      flex-shrink: 0;
+      position: relative; z-index: 1;
+    }
+    .pipe-content h4 { font-size: 0.92rem; font-weight: 600; margin-bottom: 3px; }
+    .pipe-content p  { font-size: 0.8rem; color: var(--muted2); line-height: 1.5; }
+
+    /* ── Feature list ─────────────────────────────── */
+    .feature-row {
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .feature-row:last-child { border-bottom: none; }
+    .feat-rank { width: 24px; text-align: center; font-weight: 700; color: var(--muted); font-size: 0.78rem; }
+    .feat-name { flex: 1; font-size: 0.85rem; font-weight: 500; font-family: monospace; color: var(--cyan); }
+    .feat-bar-mini { flex: 2; height: 6px; background: var(--surface3); border-radius: 10px; overflow: hidden; }
+    .feat-fill { height: 100%; background: linear-gradient(90deg, var(--violet), var(--cyan)); border-radius: 10px; animation: growBar 1s ease forwards; transform: scaleX(0); }
+
+    /* ── Metric pill ──────────────────────────────── */
+    .metric-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border); }
+    .metric-row:last-child { border-bottom: none; }
+    .metric-row span:first-child { font-size: 0.83rem; color: var(--muted2); }
+    .metric-row span:last-child  { font-weight: 600; font-size: 0.88rem; }
+
+    /* ── Alert box ────────────────────────────────── */
+    .alert {
+      display: flex; gap: 10px; align-items: flex-start;
+      padding: 14px 16px;
+      border-radius: var(--radius-sm);
+      font-size: 0.82rem;
+      line-height: 1.5;
+      margin-top: 1rem;
+    }
+    .alert-blue  { background: rgba(59,130,246,0.1); border: 1px solid rgba(59,130,246,0.25); color: #93c5fd; }
+    .alert-amber { background: rgba(245,158,11,0.1); border: 1px solid rgba(245,158,11,0.25); color: #fcd34d; }
+    .alert-icon  { font-size: 1rem; flex-shrink: 0; }
+
+    /* ── Progress bar ─────────────────────────────── */
+    .progress-track { height: 6px; background: var(--surface3); border-radius: 10px; overflow: hidden; }
+    .progress-fill  { height: 100%; border-radius: 10px; }
+
+    /* ── Footer ───────────────────────────────────── */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 1.2rem 2rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.75rem;
+      color: var(--muted);
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    footer a { color: var(--blue); text-decoration: none; }
+    footer a:hover { text-decoration: underline; }
+
+    /* ── Responsive ───────────────────────────────── */
+    @media (max-width: 768px) {
+      header { padding: 0 1rem; }
+      main   { padding: 1.5rem 1rem; }
+      nav    { padding: 0 1rem; }
+      .hero h1 { font-size: 1.4rem; }
+      .hero::after { display: none; }
+      .form-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ── Header ───────────────────────────────────── -->
+  <header>
+    <div class="logo">
+      <div class="logo-icon">⚙️</div>
+      <div>
+        <div class="logo-text">APS Predict</div>
+        <div class="logo-sub">Scania Trucks — LightGBM v1.0</div>
+      </div>
+    </div>
+    <div class="api-badge" id="apiBadge">
+      <div class="badge-dot" id="badgeDot"></div>
+      <span id="badgeText">Checking API…</span>
+    </div>
+  </header>
+
+  <!-- ── Navigation ───────────────────────────────── -->
+  <nav id="navBar">
+    <button class="tab-btn active" data-tab="overview"    id="tab-overview">🏠 Overview</button>
+    <button class="tab-btn"        data-tab="models"      id="tab-models">📊 Model Comparison</button>
+    <button class="tab-btn"        data-tab="risk"        id="tab-risk">🎯 Risk Analysis</button>
+    <button class="tab-btn"        data-tab="predictor"   id="tab-predictor">🔮 Live Predictor</button>
+    <button class="tab-btn"        data-tab="methodology" id="tab-methodology">📋 Methodology</button>
+  </nav>
+
+  <main>
+
+    <!-- ══════════════════════════════════════════════
+         TAB 1: OVERVIEW
+    ══════════════════════════════════════════════ -->
+    <div class="tab-panel active" id="panel-overview">
+
+      <!-- Hero -->
+      <div class="hero">
+        <h1>Air Pressure System <span>Failure Prediction</span></h1>
+        <p>
+          A LightGBM binary classifier trained on 170 anonymized sensor readings from Scania trucks
+          to predict APS failures — enabling proactive maintenance and reducing costly breakdowns.
+        </p>
+        <div class="hero-tags">
+          <span class="tag tag-blue">LightGBM Classifier</span>
+          <span class="tag tag-violet">PR-AUC: 0.8933</span>
+          <span class="tag tag-green">16,000 Test Trucks</span>
+          <span class="tag tag-amber">Imbalanced Dataset (2.34%)</span>
+        </div>
+      </div>
+
+      <!-- KPI Grid -->
+      <div class="section-title">📈 Model Performance KPIs</div>
+      <div class="section-sub">Key metrics evaluated on the held-out test set of 16,000 Scania truck records</div>
+      <div class="grid-3" style="margin-bottom:2rem;">
+        <div class="kpi-card" style="--accent-color: #3b82f6">
+          <div class="kpi-label">PR-AUC (Primary)</div>
+          <div class="kpi-value" data-count="0.8933" data-decimals="4" style="color:#3b82f6">0</div>
+          <div class="kpi-sub">Prioritized for rare-event detection</div>
+          <div class="kpi-icon">🎯</div>
+        </div>
+        <div class="kpi-card" style="--accent-color: #8b5cf6">
+          <div class="kpi-label">ROC-AUC</div>
+          <div class="kpi-value" data-count="0.9936" data-decimals="4" style="color:#8b5cf6">0</div>
+          <div class="kpi-sub">Excellent overall discrimination</div>
+          <div class="kpi-icon">📈</div>
+        </div>
+        <div class="kpi-card" style="--accent-color: #10b981">
+          <div class="kpi-label">F1 Score</div>
+          <div class="kpi-value" data-count="0.8152" data-decimals="4" style="color:#10b981">0</div>
+          <div class="kpi-sub">Balanced precision-recall trade-off</div>
+          <div class="kpi-icon">⚖️</div>
+        </div>
+        <div class="kpi-card" style="--accent-color: #f59e0b">
+          <div class="kpi-label">Recall @ Threshold</div>
+          <div class="kpi-value" data-count="77.07" data-decimals="2" data-suffix="%" style="color:#f59e0b">0%</div>
+          <div class="kpi-sub">289 / 375 APS failures caught</div>
+          <div class="kpi-icon">🔍</div>
+        </div>
+        <div class="kpi-card" style="--accent-color: #06b6d4">
+          <div class="kpi-label">Precision @ Threshold</div>
+          <div class="kpi-value" data-count="86.53" data-decimals="2" data-suffix="%" style="color:#06b6d4">0%</div>
+          <div class="kpi-sub">45 unnecessary inspections only</div>
+          <div class="kpi-icon">✅</div>
+        </div>
+        <div class="kpi-card" style="--accent-color: #ec4899">
+          <div class="kpi-label">Optimal Threshold</div>
+          <div class="kpi-value" data-count="0.7147" data-decimals="4" style="color:#ec4899">0</div>
+          <div class="kpi-sub">Maximizes F1 on validation PR curve</div>
+          <div class="kpi-icon">🎚️</div>
+        </div>
+      </div>
+
+      <!-- Summary cards row -->
+      <div class="grid-2" style="margin-bottom:2rem;">
+        <div class="card">
+          <div style="font-size:0.8rem;font-weight:600;color:var(--muted2);text-transform:uppercase;letter-spacing:0.07em;margin-bottom:1rem;">Dataset Split</div>
+          <div class="metric-row"><span>Training Rows</span><span>29,618</span></div>
+          <div class="metric-row"><span>Test Rows</span><span>16,000</span></div>
+          <div class="metric-row"><span>Training Failure Rate</span><span style="color:var(--amber)">1.69%</span></div>
+          <div class="metric-row"><span>Test Failure Rate</span><span style="color:var(--amber)">2.34%</span></div>
+          <div class="metric-row"><span>Sensor Features</span><span>170 anonymized</span></div>
+          <div class="metric-row"><span>Features after FE</span><span>~210 (with flags &amp; aggregates)</span></div>
+        </div>
+        <div class="card">
+          <div style="font-size:0.8rem;font-weight:600;color:var(--muted2);text-transform:uppercase;letter-spacing:0.07em;margin-bottom:1rem;">Prediction Outcomes (Test Set)</div>
+          <div class="metric-row">
+            <span>✅ True Positives (caught)</span>
+            <span style="color:var(--green);font-size:1.05rem;">289</span>
+          </div>
+          <div class="metric-row">
+            <span>❌ False Negatives (missed)</span>
+            <span style="color:var(--red)">86</span>
+          </div>
+          <div class="metric-row">
+            <span>⚠️ False Positives (excess)</span>
+            <span style="color:var(--amber)">45</span>
+          </div>
+          <div class="metric-row">
+            <span>✔️ True Negatives</span>
+            <span style="color:var(--blue)">15,580</span>
+          </div>
+          <div class="metric-row">
+            <span>🔴 High-Risk Trucks</span>
+            <span>339</span>
+          </div>
+          <div class="metric-row">
+            <span>🔴 High-Risk Failure Rate</span>
+            <span style="color:var(--red);font-weight:700;">85.3%</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="alert alert-blue">
+        <div class="alert-icon">💡</div>
+        <div><strong>Key Insight:</strong> The High-Risk bucket (probability ≥ 0.70) has an 85.3% actual failure rate, making it an extremely reliable signal for immediate maintenance scheduling. Only 339 trucks out of 16,000 fall into this category, keeping inspection volume manageable.</div>
+      </div>
+    </div>
+
+    <!-- ══════════════════════════════════════════════
+         TAB 2: MODEL COMPARISON
+    ══════════════════════════════════════════════ -->
+    <div class="tab-panel" id="panel-models">
+      <div class="section-title">📊 Model Comparison</div>
+      <div class="section-sub">Four models trained on the same dataset — LightGBM selected as the champion</div>
+
+      <!-- Table -->
+      <div class="table-wrap" style="margin-bottom:2rem;">
+        <table>
+          <thead>
+            <tr>
+              <th>Model</th>
+              <th>Type</th>
+              <th>Imbalance Strategy</th>
+              <th>Val PR-AUC</th>
+              <th>Val ROC-AUC</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Logistic Regression</td>
+              <td>Linear Baseline</td>
+              <td><code style="font-size:0.78rem;color:var(--cyan)">class_weight='balanced'</code></td>
+              <td>0.7603</td>
+              <td>0.9795</td>
+              <td><span class="risk-badge risk-medium">Baseline</span></td>
+            </tr>
+            <tr>
+              <td>Random Forest</td>
+              <td>Ensemble</td>
+              <td><code style="font-size:0.78rem;color:var(--cyan)">class_weight='balanced'</code></td>
+              <td>0.6881</td>
+              <td>0.9691</td>
+              <td><span class="risk-badge risk-low">Weak</span></td>
+            </tr>
+            <tr>
+              <td>XGBoost</td>
+              <td>Gradient Boosting</td>
+              <td><code style="font-size:0.78rem;color:var(--cyan)">scale_pos_weight</code></td>
+              <td>0.8616</td>
+              <td>0.9809</td>
+              <td><span class="risk-badge risk-medium">Runner-up</span></td>
+            </tr>
+            <tr class="champion">
+              <td>⭐ LightGBM</td>
+              <td>Gradient Boosting</td>
+              <td><code style="font-size:0.78rem;color:var(--cyan)">scale_pos_weight + early stop</code></td>
+              <td style="color:var(--green);font-weight:700;">0.8933</td>
+              <td style="color:var(--green);font-weight:700;">0.9936</td>
+              <td><span class="risk-badge" style="background:rgba(16,185,129,0.15);color:#6ee7b7;border-color:rgba(16,185,129,0.3)">✓ Champion</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Bar charts -->
+      <div class="grid-2">
+        <div class="card">
+          <div style="font-size:0.88rem;font-weight:600;margin-bottom:1.2rem;">PR-AUC Comparison</div>
+          <div class="bar-wrap">
+            <div class="bar-row">
+              <div class="bar-label"><span>LightGBM ⭐</span><span style="color:var(--green)">0.8933</span></div>
+              <div class="bar-track"><div class="bar-fill green-bar" style="--w:89.33%" style="width:89.33%"></div></div>
+            </div>
+            <div class="bar-row">
+              <div class="bar-label"><span>XGBoost</span><span>0.8616</span></div>
+              <div class="bar-track"><div class="bar-fill" style="width:86.16%"></div></div>
+            </div>
+            <div class="bar-row">
+              <div class="bar-label"><span>Logistic Regression</span><span>0.7603</span></div>
+              <div class="bar-track"><div class="bar-fill amber-bar" style="width:76.03%"></div></div>
+            </div>
+            <div class="bar-row">
+              <div class="bar-label"><span>Random Forest</span><span>0.6881</span></div>
+              <div class="bar-track"><div class="bar-fill red-bar" style="width:68.81%"></div></div>
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <div style="font-size:0.88rem;font-weight:600;margin-bottom:1.2rem;">ROC-AUC Comparison</div>
+          <div class="bar-wrap">
+            <div class="bar-row">
+              <div class="bar-label"><span>LightGBM ⭐</span><span style="color:var(--green)">0.9936</span></div>
+              <div class="bar-track"><div class="bar-fill green-bar" style="width:99.36%"></div></div>
+            </div>
+            <div class="bar-row">
+              <div class="bar-label"><span>XGBoost</span><span>0.9809</span></div>
+              <div class="bar-track"><div class="bar-fill" style="width:98.09%"></div></div>
+            </div>
+            <div class="bar-row">
+              <div class="bar-label"><span>Logistic Regression</span><span>0.9795</span></div>
+              <div class="bar-track"><div class="bar-fill amber-bar" style="width:97.95%"></div></div>
+            </div>
+            <div class="bar-row">
+              <div class="bar-label"><span>Random Forest</span><span>0.9691</span></div>
+              <div class="bar-track"><div class="bar-fill red-bar" style="width:96.91%"></div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Why LightGBM card -->
+      <div class="card" style="margin-top:1.5rem;">
+        <div style="font-size:0.88rem;font-weight:600;margin-bottom:1rem;">Why LightGBM was chosen as the final model</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:1rem;">
+          <div style="display:flex;gap:10px;align-items:flex-start;">
+            <div style="font-size:1.3rem;">🏆</div>
+            <div>
+              <div style="font-size:0.83rem;font-weight:600;margin-bottom:3px;">Best PR-AUC</div>
+              <div style="font-size:0.78rem;color:var(--muted2);">Highest performance on the primary rare-event metric</div>
+            </div>
+          </div>
+          <div style="display:flex;gap:10px;align-items:flex-start;">
+            <div style="font-size:1.3rem;">⚡</div>
+            <div>
+              <div style="font-size:0.83rem;font-weight:600;margin-bottom:3px;">Training Speed</div>
+              <div style="font-size:0.78rem;color:var(--muted2);">Leaf-wise tree growth is faster than XGBoost</div>
+            </div>
+          </div>
+          <div style="display:flex;gap:10px;align-items:flex-start;">
+            <div style="font-size:1.3rem;">🧩</div>
+            <div>
+              <div style="font-size:0.83rem;font-weight:600;margin-bottom:3px;">Native NaN Handling</div>
+              <div style="font-size:0.78rem;color:var(--muted2);">Handles missing sensor values without imputation alone</div>
+            </div>
+          </div>
+          <div style="display:flex;gap:10px;align-items:flex-start;">
+            <div style="font-size:1.3rem;">🛑</div>
+            <div>
+              <div style="font-size:0.83rem;font-weight:600;margin-bottom:3px;">Early Stopping</div>
+              <div style="font-size:0.78rem;color:var(--muted2);">Prevents overfitting with validation-based stopping</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══════════════════════════════════════════════
+         TAB 3: RISK ANALYSIS
+    ══════════════════════════════════════════════ -->
+    <div class="tab-panel" id="panel-risk">
+      <div class="section-title">🎯 Risk Analysis</div>
+      <div class="section-sub">How predictions are segmented into risk tiers for operational decision-making</div>
+
+      <!-- Risk bucket cards -->
+      <div class="grid-3" style="margin-bottom:2rem;">
+        <div class="risk-card high">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+            <span style="font-size:1.4rem;">🔴</span>
+            <h4 style="color:#fca5a5;">High Risk</h4>
+          </div>
+          <div class="risk-badge risk-high" style="width:fit-content;margin-bottom:8px;">Probability ≥ 0.70</div>
+          <p>Immediate inspection required. This tier captures <strong>85.3%</strong> actual APS failures. Out of 339 trucks flagged, 289 truly had APS failure.</p>
+        </div>
+        <div class="risk-card medium">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+            <span style="font-size:1.4rem;">🟡</span>
+            <h4 style="color:#fcd34d;">Medium Risk</h4>
+          </div>
+          <div class="risk-badge risk-medium" style="width:fit-content;margin-bottom:8px;">Probability 0.40–0.69</div>
+          <p>Schedule inspection within 48 hours. Borderline predictions — these trucks show partial sensor anomalies warranting follow-up.</p>
+        </div>
+        <div class="risk-card low">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+            <span style="font-size:1.4rem;">🟢</span>
+            <h4 style="color:#6ee7b7;">Low Risk</h4>
+          </div>
+          <div class="risk-badge risk-low" style="width:fit-content;margin-bottom:8px;">Probability &lt; 0.40</div>
+          <p>Routine scheduled check. Sensor readings appear nominal — proceed with standard maintenance intervals.</p>
+        </div>
+      </div>
+
+      <!-- Donut + Confusion Matrix -->
+      <div class="grid-2" style="margin-bottom:2rem;">
+        <div class="card">
+          <div style="font-size:0.88rem;font-weight:600;margin-bottom:1.4rem;">Risk Distribution (Test Set — 16,000 Trucks)</div>
+          <div class="donut-wrap">
+            <svg class="donut-svg" viewBox="0 0 160 160" id="donutChart">
+              <!-- Background circle -->
+              <circle cx="80" cy="80" r="60" fill="none" stroke="rgba(255,255,255,0.05)" stroke-width="20"/>
+              <!-- Low: ~98% of 15,661 non-flagged: let's use approximate ring -->
+              <!-- Circumference = 2π*60 ≈ 376.99 -->
+              <!-- High: 339/16000 = 2.12% → 8 -->
+              <!-- Medium+FP: ~45 medium, ~50 total → 0.59% → 2.2 -->
+              <!-- Low: rest → 97.3% → 366.8 -->
+              <circle cx="80" cy="80" r="60" fill="none"
+                stroke="#10b981" stroke-width="20" stroke-linecap="butt"
+                stroke-dasharray="366.8 377"
+                stroke-dashoffset="94.25"
+                transform="rotate(-90 80 80)"/>
+              <circle cx="80" cy="80" r="60" fill="none"
+                stroke="#f59e0b" stroke-width="20" stroke-linecap="butt"
+                stroke-dasharray="2.2 377"
+                stroke-dashoffset="-272.55"
+                transform="rotate(-90 80 80)"/>
+              <circle cx="80" cy="80" r="60" fill="none"
+                stroke="#ef4444" stroke-width="20" stroke-linecap="butt"
+                stroke-dasharray="8 377"
+                stroke-dashoffset="-274.75"
+                transform="rotate(-90 80 80)"/>
+              <!-- Center -->
+              <text x="80" y="76" text-anchor="middle" fill="#f1f5f9" font-size="16" font-weight="800" font-family="Inter,sans-serif">16,000</text>
+              <text x="80" y="91" text-anchor="middle" fill="#64748b" font-size="8" font-family="Inter,sans-serif">Trucks</text>
+            </svg>
+            <div class="donut-legend">
+              <div class="legend-item">
+                <div class="legend-dot" style="background:#10b981;"></div>
+                <div class="legend-text">
+                  <strong style="color:#6ee7b7;">🟢 Low Risk</strong>
+                  <small>~15,616 trucks (97.6%)</small>
+                </div>
+              </div>
+              <div class="legend-item">
+                <div class="legend-dot" style="background:#f59e0b;"></div>
+                <div class="legend-text">
+                  <strong style="color:#fcd34d;">🟡 Medium Risk</strong>
+                  <small>~45 trucks (0.28%)</small>
+                </div>
+              </div>
+              <div class="legend-item">
+                <div class="legend-dot" style="background:#ef4444;"></div>
+                <div class="legend-text">
+                  <strong style="color:#fca5a5;">🔴 High Risk</strong>
+                  <small>339 trucks (2.12%)</small>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div style="font-size:0.88rem;font-weight:600;margin-bottom:1.4rem;">Confusion Matrix — Test Set</div>
+          <div class="cm-grid">
+            <!-- Row 0: spacer + Predicted Neg + Predicted Pos -->
+            <div></div>
+            <div class="cm-header">Predicted Negative</div>
+            <div class="cm-header">Predicted Positive</div>
+            <!-- Row 1: Actual Pos -->
+            <div class="cm-axis">Actual Positive</div>
+            <div class="cm-cell cm-fn">
+              <div class="cm-num">86</div>
+              <div class="cm-type">False Negative</div>
+            </div>
+            <div class="cm-cell cm-tp">
+              <div class="cm-num">289</div>
+              <div class="cm-type">True Positive</div>
+            </div>
+            <!-- Row 2: Actual Neg -->
+            <div class="cm-axis">Actual Negative</div>
+            <div class="cm-cell cm-tn">
+              <div class="cm-num">15,580</div>
+              <div class="cm-type">True Negative</div>
+            </div>
+            <div class="cm-cell cm-fp">
+              <div class="cm-num">45</div>
+              <div class="cm-type">False Positive</div>
+            </div>
+          </div>
+          <div class="alert alert-amber" style="margin-top:1rem;">
+            <div class="alert-icon">⚠️</div>
+            <div>86 missed failures concentrate at probabilities 0.30–0.50 — borderline cases where additional sensor monitoring would help most.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Cost analysis -->
+      <div class="card">
+        <div style="font-size:0.88rem;font-weight:600;margin-bottom:1rem;">Operational Cost Trade-off</div>
+        <p style="font-size:0.82rem;color:var(--muted2);margin-bottom:1rem;line-height:1.6;">
+          A missed APS failure costs approximately <strong style="color:var(--red);">10–50× more</strong> than an unnecessary inspection.
+          The model's threshold of 0.7147 was selected to balance this asymmetric cost structure.
+        </p>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:1rem;">
+          <div style="text-align:center;padding:1rem;background:rgba(239,68,68,0.08);border-radius:10px;border:1px solid rgba(239,68,68,0.18);">
+            <div style="font-size:1.5rem;margin-bottom:4px;">❌</div>
+            <div style="font-size:1.4rem;font-weight:800;color:#fca5a5;">86</div>
+            <div style="font-size:0.72rem;color:var(--muted2);">Missed Failures<br>High-cost events</div>
+          </div>
+          <div style="text-align:center;padding:1rem;background:rgba(245,158,11,0.07);border-radius:10px;border:1px solid rgba(245,158,11,0.18);">
+            <div style="font-size:1.5rem;margin-bottom:4px;">⚠️</div>
+            <div style="font-size:1.4rem;font-weight:800;color:#fcd34d;">45</div>
+            <div style="font-size:0.72rem;color:var(--muted2);">Unnecessary Inspections<br>Low-cost events</div>
+          </div>
+          <div style="text-align:center;padding:1rem;background:rgba(16,185,129,0.07);border-radius:10px;border:1px solid rgba(16,185,129,0.15);">
+            <div style="font-size:1.5rem;margin-bottom:4px;">✅</div>
+            <div style="font-size:1.4rem;font-weight:800;color:#6ee7b7;">289</div>
+            <div style="font-size:0.72rem;color:var(--muted2);">Failures Caught<br>Cost-saving interventions</div>
+          </div>
+          <div style="text-align:center;padding:1rem;background:rgba(59,130,246,0.07);border-radius:10px;border:1px solid rgba(59,130,246,0.18);">
+            <div style="font-size:1.5rem;margin-bottom:4px;">🛡️</div>
+            <div style="font-size:1.4rem;font-weight:800;color:#93c5fd;">15,580</div>
+            <div style="font-size:0.72rem;color:var(--muted2);">Correctly Cleared<br>No wasted resources</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══════════════════════════════════════════════
+         TAB 4: LIVE PREDICTOR
+    ══════════════════════════════════════════════ -->
+    <div class="tab-panel" id="panel-predictor">
+      <div class="section-title">🔮 Live APS Failure Predictor</div>
+      <div class="section-sub">Enter sensor values and call the live API to get a real-time prediction</div>
+
+      <div class="predictor-wrap">
+        <!-- Input Form -->
+        <div class="card" style="align-self:start;">
+          <div class="form-title">Sensor Input (Key Features)</div>
+          <div style="font-size:0.75rem;color:var(--muted);margin-bottom:1rem;">All fields optional — missing values are auto-imputed</div>
+          <div class="form-grid">
+            <div class="form-group">
+              <label for="f_aa_000">aa_000</label>
+              <input type="number" id="f_aa_000" placeholder="e.g. 76424" />
+            </div>
+            <div class="form-group">
+              <label for="f_ab_000">ab_000</label>
+              <input type="number" id="f_ab_000" placeholder="e.g. 178" />
+            </div>
+            <div class="form-group">
+              <label for="f_cr_000">cr_000</label>
+              <input type="number" id="f_cr_000" placeholder="e.g. 0" />
+            </div>
+            <div class="form-group">
+              <label for="f_cs_000">cs_000</label>
+              <input type="number" id="f_cs_000" placeholder="e.g. 0" />
+            </div>
+            <div class="form-group">
+              <label for="f_ee_000">ee_000</label>
+              <input type="number" id="f_ee_000" placeholder="e.g. 0" />
+            </div>
+            <div class="form-group">
+              <label for="f_ag_004">ag_004</label>
+              <input type="number" id="f_ag_004" placeholder="e.g. 0" />
+            </div>
+            <div class="form-group">
+              <label for="f_ay_006">ay_006</label>
+              <input type="number" id="f_ay_006" placeholder="e.g. 0" />
+            </div>
+            <div class="form-group">
+              <label for="f_ay_000">ay_000</label>
+              <input type="number" id="f_ay_000" placeholder="e.g. 14128" />
+            </div>
+            <div class="form-group">
+              <label for="f_ba_000">ba_000</label>
+              <input type="number" id="f_ba_000" placeholder="e.g. 0" />
+            </div>
+            <div class="form-group">
+              <label for="f_bj_000">bj_000</label>
+              <input type="number" id="f_bj_000" placeholder="e.g. 0" />
+            </div>
+          </div>
+          <button class="btn-predict" id="predictBtn" onclick="runPrediction()">
+            <div class="spinner"></div>
+            <span class="btn-text">⚡ Run Prediction</span>
+          </button>
+          <div style="margin-top:0.8rem;display:flex;gap:8px;flex-wrap:wrap;">
+            <button onclick="fillHighRiskExample()" style="flex:1;padding:8px;background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.3);color:#fca5a5;border-radius:var(--radius-sm);font-family:inherit;font-size:0.75rem;cursor:pointer;font-weight:600;">🔴 Fill High-Risk Example</button>
+            <button onclick="clearForm()" style="flex:1;padding:8px;background:var(--surface2);border:1px solid var(--border);color:var(--muted2);border-radius:var(--radius-sm);font-family:inherit;font-size:0.75rem;cursor:pointer;font-weight:600;">🗑️ Clear All</button>
+          </div>
+          <div class="alert alert-blue" style="margin-top:0.8rem;">
+            <div class="alert-icon">🔗</div>
+            <div>Requires FastAPI server at <strong>http://localhost:8000</strong>. Run: <code style="font-size:0.75rem;">uvicorn api.main:app --port 8000</code></div>
+          </div>
+        </div>
+
+        <!-- Result Panel -->
+        <div class="result-panel" id="resultPanel">
+          <div class="result-idle" id="idleState">
+            <div class="idle-icon">🎯</div>
+            <div>Fill in sensor values and click <strong>Run Prediction</strong></div>
+            <div style="margin-top:8px;font-size:0.78rem;color:var(--muted);">Results will appear here</div>
+          </div>
+          <div id="resultContent" style="display:none;width:100%;">
+            <!-- Filled dynamically -->
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ══════════════════════════════════════════════
+         TAB 5: METHODOLOGY
+    ══════════════════════════════════════════════ -->
+    <div class="tab-panel" id="panel-methodology">
+      <div class="section-title">📋 Methodology</div>
+      <div class="section-sub">End-to-end pipeline from raw sensor data to deployed prediction service</div>
+
+      <div class="grid-2" style="margin-bottom:2rem;">
+        <!-- Preprocessing pipeline -->
+        <div class="card">
+          <div style="font-size:0.88rem;font-weight:600;margin-bottom:1.2rem;">Preprocessing Pipeline</div>
+          <div class="pipeline">
+            <div class="pipe-step">
+              <div class="pipe-num">1</div>
+              <div class="pipe-content">
+                <h4>Missing Value Parsing</h4>
+                <p>Parsed <code>"na"</code> strings as NaN. Dropped 13 columns with &gt;70% missingness. Applied median imputation on remaining columns — robust to outliers and skew.</p>
+              </div>
+            </div>
+            <div class="pipe-step">
+              <div class="pipe-num">2</div>
+              <div class="pipe-content">
+                <h4>Missingness Indicators</h4>
+                <p>Added binary flags for columns with 20–70% missing data. Encodes the "was this sensor reading available?" signal as an additional feature.</p>
+              </div>
+            </div>
+            <div class="pipe-step">
+              <div class="pipe-num">3</div>
+              <div class="pipe-content">
+                <h4>Row-Level Aggregates</h4>
+                <p>Added per-row: null count, null fraction, mean, std, min, max across all sensors — capturing overall sensor health at the observation level.</p>
+              </div>
+            </div>
+            <div class="pipe-step">
+              <div class="pipe-num">4</div>
+              <div class="pipe-content">
+                <h4>Feature Scaling</h4>
+                <p>StandardScaler applied after imputation for models sensitive to feature scale (Logistic Regression). Tree models operate on raw values.</p>
+              </div>
+            </div>
+            <div class="pipe-step">
+              <div class="pipe-num">5</div>
+              <div class="pipe-content">
+                <h4>Threshold Optimisation</h4>
+                <p>Classification threshold selected by maximising F1 on the validation PR curve. Final threshold: <strong style="color:var(--cyan)">0.7147</strong>, reflecting the 10–50× cost asymmetry of missed failures.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Right column: features + validation -->
+        <div style="display:flex;flex-direction:column;gap:1.25rem;">
+          <!-- Top features -->
+          <div class="card">
+            <div style="font-size:0.88rem;font-weight:600;margin-bottom:1rem;">Top SHAP Feature Drivers</div>
+            <div class="feature-row">
+              <div class="feat-rank">#1</div>
+              <div class="feat-name">ee_000</div>
+              <div class="feat-bar-mini"><div class="feat-fill" style="width:100%"></div></div>
+            </div>
+            <div class="feature-row">
+              <div class="feat-rank">#2</div>
+              <div class="feat-name">cr_000</div>
+              <div class="feat-bar-mini"><div class="feat-fill" style="width:88%"></div></div>
+            </div>
+            <div class="feature-row">
+              <div class="feat-rank">#3</div>
+              <div class="feat-name">cs_000</div>
+              <div class="feat-bar-mini"><div class="feat-fill" style="width:78%"></div></div>
+            </div>
+            <div class="feature-row">
+              <div class="feat-rank">#4</div>
+              <div class="feat-name">ag_004</div>
+              <div class="feat-bar-mini"><div class="feat-fill" style="width:70%"></div></div>
+            </div>
+            <div class="feature-row">
+              <div class="feat-rank">#5</div>
+              <div class="feat-name">ay_006</div>
+              <div class="feat-bar-mini"><div class="feat-fill" style="width:62%"></div></div>
+            </div>
+            <div class="feature-row">
+              <div class="feat-rank">#6</div>
+              <div class="feat-name">row_null_frac</div>
+              <div class="feat-bar-mini"><div class="feat-fill" style="width:55%"></div></div>
+            </div>
+            <div class="feature-row">
+              <div class="feat-rank">#7</div>
+              <div class="feat-name">ay_000</div>
+              <div class="feat-bar-mini"><div class="feat-fill" style="width:48%"></div></div>
+            </div>
+            <div class="feature-row">
+              <div class="feat-rank">#8</div>
+              <div class="feat-name">ab_000</div>
+              <div class="feat-bar-mini"><div class="feat-fill" style="width:41%"></div></div>
+            </div>
+          </div>
+
+          <!-- Validation strategy -->
+          <div class="card">
+            <div style="font-size:0.88rem;font-weight:600;margin-bottom:1rem;">Validation Strategy</div>
+            <div class="metric-row">
+              <span>Primary evaluation</span>
+              <span style="color:var(--blue)">Train/Test CSVs</span>
+            </div>
+            <div class="metric-row">
+              <span>Internal validation split</span>
+              <span>80% earlier / 20% later</span>
+            </div>
+            <div class="metric-row">
+              <span>Simulates temporal ordering</span>
+              <span style="color:var(--green)">✓ Yes</span>
+            </div>
+            <div class="metric-row">
+              <span>Cross-validation folds</span>
+              <span>Not used (train/val split)</span>
+            </div>
+            <div class="metric-row">
+              <span>Metric primary</span>
+              <span style="color:var(--violet)">PR-AUC</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Assumptions & Limitations -->
+      <div class="card">
+        <div style="font-size:0.88rem;font-weight:600;margin-bottom:1rem;">Assumptions &amp; Limitations</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:1rem;">
+          <div style="padding:12px;background:var(--surface2);border-radius:var(--radius-sm);border-left:3px solid var(--amber);">
+            <div style="font-size:0.78rem;font-weight:600;color:var(--amber);margin-bottom:4px;">NO TIMESTAMP</div>
+            <div style="font-size:0.78rem;color:var(--muted2);line-height:1.5;">Time-based split approximated using row ordering. If rows are shuffled in source, this may not hold.</div>
+          </div>
+          <div style="padding:12px;background:var(--surface2);border-radius:var(--radius-sm);border-left:3px solid var(--muted);">
+            <div style="font-size:0.78rem;font-weight:600;color:var(--muted2);margin-bottom:4px;">ANONYMIZED FEATURES</div>
+            <div style="font-size:0.78rem;color:var(--muted2);line-height:1.5;">Sensor names (e.g., aa_000, cr_000) are anonymized — domain interpretation requires Scania's data dictionary.</div>
+          </div>
+          <div style="padding:12px;background:var(--surface2);border-radius:var(--radius-sm);border-left:3px solid var(--blue);">
+            <div style="font-size:0.78rem;font-weight:600;color:var(--blue);margin-bottom:4px;">STATIC MODEL</div>
+            <div style="font-size:0.78rem;color:var(--muted2);line-height:1.5;">Trained offline. Real-time streaming requires an additional data pipeline and model versioning.</div>
+          </div>
+          <div style="padding:12px;background:var(--surface2);border-radius:var(--radius-sm);border-left:3px solid var(--violet);">
+            <div style="font-size:0.78rem;font-weight:600;color:var(--violet);margin-bottom:4px;">NO SMOTE</div>
+            <div style="font-size:0.78rem;color:var(--muted2);line-height:1.5;">To avoid data leakage, SMOTE was not used. Imbalance handled via scale_pos_weight instead.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <footer>
+    <div>🚛 APS Failure Prediction Dashboard · <strong>Praneeth Ramisetti</strong> · UP Analytics 2026</div>
+    <div>LightGBM · FastAPI · PR-AUC 0.8933 · <a href="http://localhost:8000/docs" target="_blank">API Docs ↗</a></div>
+  </footer>
+</div>
+
+<script>
+  // ── Tab navigation ──────────────────────────────
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const tab = btn.dataset.tab;
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+      btn.classList.add('active');
+      document.getElementById('panel-' + tab).classList.add('active');
+    });
+  });
+
+  // ── Animated KPI counters ───────────────────────
+  function animateCounters() {
+    document.querySelectorAll('.kpi-value[data-count]').forEach(el => {
+      const target   = parseFloat(el.dataset.count);
+      const decimals = parseInt(el.dataset.decimals || '0');
+      const suffix   = el.dataset.suffix || '';
+      let start = null;
+      const duration = 1400;
+      function step(ts) {
+        if (!start) start = ts;
+        const progress = Math.min((ts - start) / duration, 1);
+        const ease = 1 - Math.pow(1 - progress, 3);
+        el.textContent = (target * ease).toFixed(decimals) + suffix;
+        if (progress < 1) requestAnimationFrame(step);
+      }
+      requestAnimationFrame(step);
+    });
+  }
+  animateCounters();
+
+  // ── API health check ────────────────────────────
+  async function checkApiHealth() {
+    const dot  = document.getElementById('badgeDot');
+    const text = document.getElementById('badgeText');
+    try {
+      const res = await fetch('http://localhost:8000/health', { signal: AbortSignal.timeout(3000) });
+      const data = await res.json();
+      if (data.status === 'ok' && data.model_loaded) {
+        dot.className  = 'badge-dot online';
+        text.textContent = 'API Online';
+      } else {
+        dot.className  = 'badge-dot offline';
+        text.textContent = 'Model not loaded';
+      }
+    } catch {
+      dot.className  = 'badge-dot offline';
+      text.textContent = 'API Offline';
+    }
+  }
+  checkApiHealth();
+  setInterval(checkApiHealth, 8000);
+
+  // ── Gauge renderer ──────────────────────────────
+  function renderGauge(prob) {
+    const pct = Math.round(prob * 100);
+    const r   = 60;
+    const circ = Math.PI * r; // half-circle
+    const offset = circ - (prob * circ);
+    let color;
+    if (prob >= 0.70)      color = '#ef4444';
+    else if (prob >= 0.40) color = '#f59e0b';
+    else                   color = '#10b981';
+
+    return `
+      <div class="gauge-wrap">
+        <svg class="gauge-svg" viewBox="0 0 160 100">
+          <path d="M 10 90 A 70 70 0 0 1 150 90"
+            fill="none" stroke="rgba(255,255,255,0.07)" stroke-width="16" stroke-linecap="round"/>
+          <path id="gaugeFill" d="M 10 90 A 70 70 0 0 1 150 90"
+            fill="none" stroke="${color}" stroke-width="16" stroke-linecap="round"
+            stroke-dasharray="${Math.PI*70}" stroke-dashoffset="${Math.PI*70*(1-prob)}"
+            style="transition: stroke-dashoffset 1s cubic-bezier(0.25,0.46,0.45,0.94)"/>
+        </svg>
+        <div class="gauge-label">
+          <div class="gauge-pct" style="color:${color}">${pct}%</div>
+          <div class="gauge-sub">failure probability</div>
+        </div>
+      </div>`;
+  }
+
+  // ── Run Prediction ──────────────────────────────
+  async function runPrediction() {
+    const btn  = document.getElementById('predictBtn');
+    const idle = document.getElementById('idleState');
+    const res  = document.getElementById('resultContent');
+
+    btn.classList.add('loading');
+    btn.disabled = true;
+
+    // Collect inputs
+    const fields = ['aa_000','ab_000','cr_000','cs_000','ee_000','ag_004','ay_006','ay_000','ba_000','bj_000'];
+    const payload = {};
+    fields.forEach(f => {
+      const val = document.getElementById('f_' + f).value;
+      if (val !== '') payload[f] = parseFloat(val);
+    });
+
+    try {
+      const response = await fetch('http://localhost:8000/predict', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: AbortSignal.timeout(8000)
+      });
+
+      if (!response.ok) {
+        throw new Error('API returned ' + response.status);
+      }
+
+      const data = await response.json();
+      showResult(data);
+
+    } catch (err) {
+      idle.style.display = 'none';
+      res.style.display  = 'flex';
+      res.style.flexDirection = 'column';
+      res.style.alignItems = 'center';
+      res.innerHTML = `
+        <div style="font-size:2.5rem;margin-bottom:0.5rem;opacity:0.4;">⚠️</div>
+        <div style="font-size:0.9rem;font-weight:600;margin-bottom:0.3rem;">Could not reach API</div>
+        <div class="api-error">
+          ${err.message || 'Connection refused'}<br>
+          Make sure the FastAPI server is running:<br>
+          <code>uvicorn api.main:app --port 8000</code>
+        </div>`;
+    } finally {
+      btn.classList.remove('loading');
+      btn.disabled = false;
+    }
+  }
+
+  function showResult(data) {
+    const idle = document.getElementById('idleState');
+    const res  = document.getElementById('resultContent');
+    idle.style.display = 'none';
+    res.style.display  = 'flex';
+    res.style.flexDirection = 'column';
+    res.style.alignItems = 'center';
+    res.style.width = '100%';
+
+    const riskClass = data.risk_bucket === 'High' ? 'risk-high' : data.risk_bucket === 'Medium' ? 'risk-medium' : 'risk-low';
+    const emoji     = data.risk_bucket === 'High' ? '🔴' : data.risk_bucket === 'Medium' ? '🟡' : '🟢';
+    const labelColor = data.predicted_class === 1 ? '#fca5a5' : '#6ee7b7';
+
+    res.innerHTML = `
+      ${renderGauge(data.probability)}
+      <div class="result-risk">${emoji} ${data.risk_bucket} Risk</div>
+      <div class="result-label" style="color:${labelColor};font-weight:600;">${data.predicted_label}</div>
+      <div class="result-meta">
+        <div class="meta-chip">
+          <strong style="color:${data.predicted_class===1?'#fca5a5':'#6ee7b7'}">${data.predicted_class === 1 ? 'FAILURE' : 'NO FAILURE'}</strong>
+          <span>Prediction</span>
+        </div>
+        <div class="meta-chip">
+          <strong>${(data.probability * 100).toFixed(2)}%</strong>
+          <span>Probability</span>
+        </div>
+        <div class="meta-chip">
+          <strong>${data.confidence}</strong>
+          <span>Confidence</span>
+        </div>
+        <div class="meta-chip">
+          <strong>${data.threshold_used}</strong>
+          <span>Threshold</span>
+        </div>
+      </div>
+      <div class="result-rec">
+        💡 <strong>Recommendation:</strong> ${data.recommendation}
+      </div>`;
+  }
+
+  function fillHighRiskExample() {
+    // High-risk sensor values — anomalous readings
+    document.getElementById('f_aa_000').value = 87000;
+    document.getElementById('f_ab_000').value = 0;
+    document.getElementById('f_cr_000').value = 120000;
+    document.getElementById('f_cs_000').value = 98000;
+    document.getElementById('f_ee_000').value = 115000;
+    document.getElementById('f_ag_004').value = 0;
+    document.getElementById('f_ay_006').value = 48000;
+    document.getElementById('f_ay_000').value = 95000;
+    document.getElementById('f_ba_000').value = 0;
+    document.getElementById('f_bj_000').value = 0;
+  }
+
+  function clearForm() {
+    ['aa_000','ab_000','cr_000','cs_000','ee_000','ag_004','ay_006','ay_000','ba_000','bj_000'].forEach(f => {
+      document.getElementById('f_' + f).value = '';
+    });
+    document.getElementById('idleState').style.display = 'block';
+    document.getElementById('resultContent').style.display = 'none';
+  }
+
+  // ── CSS bar animation trick ─────────────────────
+  // Re-animate bars when tab becomes visible
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      setTimeout(() => {
+        document.querySelectorAll('.bar-fill, .feat-fill').forEach(bar => {
+          bar.style.animation = 'none';
+          bar.offsetHeight; // reflow
+          bar.style.animation = '';
+        });
+      }, 50);
+    });
+  });
+</script>
+</body>
+</html>
