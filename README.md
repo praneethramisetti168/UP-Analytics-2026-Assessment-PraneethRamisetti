@@ -92,7 +92,7 @@ Threshold was selected by maximizing F1 on the validation PR curve, balancing th
 
 ```bash
 # 1. Clone the repo
-git clone https://github.com/<your-handle>/UP-Analytics-2026-Assessment-PraneethRamisetti
+git clone https://github.com/praneethramisetti168/UP-Analytics-2026-Assessment-PraneethRamisetti
 cd UP-Analytics-2026-Assessment-PraneethRamisetti
 
 # 2. Install dependencies
