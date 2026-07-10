@@ -17,6 +17,7 @@ Endpoints:
     GET  /redoc         → ReDoc documentation
 """
 
+import io
 import json
 import sys
 from pathlib import Path
@@ -25,9 +26,9 @@ from typing import List
 import joblib
 import numpy as np
 import pandas as pd
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, HTMLResponse
+from fastapi.responses import JSONResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 # Add parent dir to path so we can import schemas
@@ -297,6 +298,95 @@ async def predict_batch(batch: BatchSensorInput):
 @app.get("/health", summary="Simple health ping")
 async def health():
     return {"status": "ok", "model_loaded": model is not None}
+
+
+@app.post("/predict/csv", summary="Batch predict from uploaded CSV file")
+async def predict_csv(file: UploadFile = File(...)):
+    """
+    Accepts a CSV file upload with sensor readings (one truck per row).
+    Returns predictions for every row plus a fleet-level summary.
+    The response JSON includes a `csv_download` field with base64-encoded
+    result CSV for client-side download.
+    """
+    if model is None:
+        raise HTTPException(status_code=503, detail="Model not loaded. Run run_analysis.py first.")
+
+    # ── Read CSV ────────────────────────────────────
+    contents = await file.read()
+    try:
+        df_raw = pd.read_csv(io.BytesIO(contents))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Could not parse CSV: {e}")
+
+    if df_raw.empty:
+        raise HTTPException(status_code=400, detail="CSV file is empty.")
+    if len(df_raw) > 5000:
+        raise HTTPException(status_code=400, detail="CSV must contain ≤ 5,000 rows.")
+
+    # ── Lowercase column names for compatibility ─────
+    df_raw.columns = [c.lower().strip() for c in df_raw.columns]
+
+    # Drop label column if present (common in test CSVs)
+    label_col = None
+    for lc in ["class", "label", "target"]:
+        if lc in df_raw.columns:
+            label_col = df_raw[lc].copy()
+            df_raw = df_raw.drop(columns=[lc])
+            break
+
+    # Replace "na" strings with NaN (original dataset format)
+    df_raw = df_raw.replace("na", np.nan)
+    records = df_raw.to_dict(orient="records")
+
+    # ── Run predictions ──────────────────────────────
+    X = preprocess_input(records)
+    threshold = meta["best_threshold"]
+    probs = model.predict_proba(X)[:, 1]
+
+    risk_counts = {"High": 0, "Medium": 0, "Low": 0}
+    aps_count = 0
+    result_rows = []
+
+    for i, prob in enumerate(probs):
+        pred_class, label, risk, rec, confidence = classify(float(prob), threshold)
+        risk_counts[risk] += 1
+        if pred_class == 1:
+            aps_count += 1
+        row = {
+            "row_index": i + 1,
+            "predicted_class": pred_class,
+            "predicted_label": label,
+            "probability": round(float(prob), 6),
+            "risk_bucket": risk,
+            "recommendation": rec,
+            "confidence": confidence,
+        }
+        if label_col is not None:
+            row["actual_class"] = str(label_col.iloc[i])
+        result_rows.append(row)
+
+    summary = {
+        "total_trucks": len(records),
+        "aps_failures_predicted": aps_count,
+        "aps_failure_rate": round(aps_count / len(records), 4),
+        "risk_distribution": risk_counts,
+        "threshold_used": threshold,
+        "filename": file.filename,
+    }
+
+    # ── Build result CSV (base64) for download ───────
+    import base64
+    result_df = pd.DataFrame(result_rows)
+    csv_bytes = result_df.to_csv(index=False).encode("utf-8")
+    csv_b64 = base64.b64encode(csv_bytes).decode("utf-8")
+
+    return JSONResponse({
+        "total": len(records),
+        "predictions": result_rows,
+        "summary": summary,
+        "csv_download": csv_b64,
+        "csv_filename": file.filename.replace(".csv", "_predictions.csv"),
+    })
 
 
 # ─────────────────────────────────────────────
